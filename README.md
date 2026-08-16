@@ -26,6 +26,26 @@ categories, budgets, reports) is scoped to your account.
 - Multi-user by design: every category/transaction/report is scoped to `user_id`, so
   each account has its own independent set of data
 
+### Shared Ledgers & Role-Based Access
+- A **Ledger** is a shared book of categories, transactions, and recurring
+  rules. New accounts get a personal ledger automatically; from there you can
+  create additional ledgers or be invited into someone else's.
+- If you belong to more than one ledger, a **ledger picker** appears after
+  login; **Switch Ledger** on the dashboard returns to it at any time without
+  logging out.
+- Every member of a ledger has a **role**, enforced everywhere in the DAO
+  layer (not just hidden in the UI):
+  | Role | Can do |
+  |---|---|
+  | **Viewer** | See transactions, reports, and receipts (read-only) |
+  | **Editor** | + Add/edit/delete transactions, manage categories & recurring rules |
+  | **Admin** | + Invite/remove members, change member roles (except the owner's), rename the ledger, change its base currency |
+  | **Owner** | + Delete the ledger entirely (every ledger has exactly one) |
+- **Manage Members…** (admin/owner only) invites people by username with a
+  chosen role, changes existing members' roles, and removes members.
+- Viewers see every "edit" button disabled rather than merely hidden, so it's
+  obvious what their access level allows.
+
 ### Expanded Financial Engine
 - **Income & Expense Tracking** — every transaction is tagged `income` or `expense`;
   the summary panel shows Income, Expenses, and **Net Cash Flow** (Income − Expenses)
@@ -42,13 +62,6 @@ categories, budgets, reports) is scoped to your account.
 - Set your own base currency (KES, USD, EUR, …) from **Save Base Currency** — you're
   never locked into USD
 - Foreign-currency transactions are normalized into your base currency automatically
-
-### Historical Rate Locking (Auditability)
-- The exact exchange rate (`rate_to_base`) active at the moment a transaction is
-  entered is locked into the database, forever
-- Past transactions' converted value **never changes**, even if live rates move later
-  or you switch your base currency — the "In Base Cur." column in the transaction
-  table shows this locked, audited amount
 
 ### Live Exchange Rates (Online Application)
 This app is **online-only**: every currency conversion — and every rate that gets
@@ -104,10 +117,6 @@ finance_tracker/
    ```bash
    pip install -r requirements.txt
    ```
-   > Tkinter ships with most standard Python installs. On some Linux
-   > distributions you may need to install it separately, e.g.:
-   > `sudo apt-get install python3-tk`
-
 4. **Run the app:**
    ```bash
    python main.py
@@ -130,6 +139,15 @@ automatically in the project root and seeded with 15 default categories
 - Click **Log Out** at the top of the dashboard at any time to return to the
   Login screen (the app keeps running — someone else can sign in, or you can
   log back in).
+
+### Ledgers & roles
+- After signing in, if you have more than one ledger you'll see a picker;
+  otherwise your ledger opens directly.
+- **Create New Ledger…** (from the picker) starts a fresh shared ledger with
+  you as owner.
+- **Manage Members…** (top bar, admin/owner only) invites people by
+  username, sets their role, or removes them.
+- **Switch Ledger** (top bar) returns to the picker without logging out.
 
 ### Adding a transaction
 Fill in **Amount**, **Currency**, **Type** (Income/Expense), **Category**,
@@ -170,7 +188,9 @@ Click **Reports & Export…** for a given month to see:
 
 | Table          | Key Columns                                                                                                          |
 |-----------------|------------------------------------------------------------------------------------------------------------------------|
-| `Users`        | `id`, `username`, `password_hash`, (`'salt$hexdigest'`), `base_currency`, `created_at`           |
+| `Users`        | `id`, `username`, `password_hash`, (`'salt$hexdigest'`), `base_currency`, `created_at`  
+| `Ledgers`                | `id`, `name`, `base_currency`, `created_by`, `created_at` |
+| `LedgerMembers`          | `id`, `ledger_id` (FK), `user_id` (FK), `role` (`owner`/`admin`/`editor`/`viewer`), `joined_at` |         |
 | `Categories`   | `id`, `name`, `monthly_budget`, `category_type` (`personal`/`business`)                                              |
 | `Transactions` | `id`, `user_id` (FK), `category_id` (FK), `amount`, `currency`, `txn_type` (`income`/`expense`), `rate_to_base`, `base_currency`, `description`, `txn_date` |
 
