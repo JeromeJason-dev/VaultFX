@@ -139,36 +139,14 @@ class DatabaseManager:
                 base_currency TEXT NOT NULL DEFAULT 'USD',
                 description   TEXT,
                 txn_date      TEXT NOT NULL DEFAULT (date('now')),
-                recurring_id  INTEGER,
                 created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (category_id) REFERENCES Categories(id) ON DELETE RESTRICT
-            );
-
-            CREATE TABLE IF NOT EXISTS RecurringTransactions (
-                id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                ledger_id      INTEGER NOT NULL REFERENCES Ledgers(id) ON DELETE CASCADE,
-                category_id    INTEGER NOT NULL REFERENCES Categories(id) ON DELETE RESTRICT,
-                amount         REAL NOT NULL,
-                currency       TEXT NOT NULL DEFAULT 'USD',
-                txn_type       TEXT NOT NULL DEFAULT 'expense'
-                               CHECK (txn_type IN ('income', 'expense')),
-                description    TEXT,
-                frequency      TEXT NOT NULL DEFAULT 'monthly'
-                               CHECK (frequency IN ('daily', 'weekly', 'monthly', 'yearly')),
-                interval_count INTEGER NOT NULL DEFAULT 1,
-                start_date     TEXT NOT NULL,
-                end_date       TEXT,
-                next_run_date  TEXT NOT NULL,
-                active         INTEGER NOT NULL DEFAULT 1,
-                created_by     INTEGER NOT NULL REFERENCES Users(id),
-                created_at     TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE INDEX IF NOT EXISTS idx_transactions_date ON Transactions(txn_date);
             CREATE INDEX IF NOT EXISTS idx_transactions_category ON Transactions(category_id);
             CREATE INDEX IF NOT EXISTS idx_transactions_type ON Transactions(txn_type);
             CREATE INDEX IF NOT EXISTS idx_ledgermembers_user ON LedgerMembers(user_id);
-            CREATE INDEX IF NOT EXISTS idx_recurring_ledger ON RecurringTransactions(ledger_id);
             """
         )
         self.conn.commit()
@@ -183,7 +161,6 @@ class DatabaseManager:
             "txn_type": "TEXT NOT NULL DEFAULT 'expense'",
             "rate_to_base": "REAL NOT NULL DEFAULT 1.0",
             "base_currency": "TEXT NOT NULL DEFAULT 'USD'",
-            "recurring_id": "INTEGER",
             "ledger_id": "INTEGER",
         }
         for col, ddl in txn_columns_to_add.items():
@@ -192,6 +169,7 @@ class DatabaseManager:
 
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_ledger ON Transactions(ledger_id)")
         self.conn.execute("DROP TABLE IF EXISTS ExchangeRateHistory")
+        self.conn.execute("DROP TABLE IF EXISTS RecurringTransactions")
         self.conn.commit()
 
         cat_cols = {row["name"] for row in self.query("PRAGMA table_info(Categories)")}

@@ -6,12 +6,11 @@ from tkinter import ttk, messagebox, filedialog
 from datetime import date
 
 from backend.db import DatabaseManager, ROLE_RANK
-from backend.dao import UserDAO, CategoryDAO, TransactionDAO, LedgerDAO, RecurringTransactionDAO
+from backend.dao import UserDAO, CategoryDAO, TransactionDAO, LedgerDAO
 from backend.currency_service import CurrencyService, CurrencyServiceError
 
 
 COMMON_CURRENCIES = ["USD", "EUR", "GBP", "KES", "JPY", "INR", "CAD", "AUD", "ZAR", "NGN"]
-FREQUENCIES = ["daily", "weekly", "monthly", "yearly"]
 ROLE_LABELS = {"owner": "Owner", "admin": "Admin", "editor": "Editor", "viewer": "Viewer"}
 
 # Budget badge -> (label suffix, row tag) used by the summary panel.
@@ -78,7 +77,6 @@ class ExpenseTrackerApp(tk.Tk):
         self.ledger_dao = ledger_dao
         self.category_dao = CategoryDAO(self.db)
         self.txn_dao = TransactionDAO(self.db)
-        self.recurring_dao = RecurringTransactionDAO(self.db)
         self.currency_service = CurrencyService()
 
         self.current_user = user
@@ -101,8 +99,6 @@ class ExpenseTrackerApp(tk.Tk):
         self.refresh_summary()
         self._apply_role_permissions()
 
-        self.after(200, self._run_due_recurring)
-
     
     # Permissions
     
@@ -116,7 +112,7 @@ class ExpenseTrackerApp(tk.Tk):
         state = "normal" if can_edit else "disabled"
         for btn in (
             self.add_btn, self.update_btn, self.delete_btn,
-            self.manage_categories_btn, self.recurring_btn,
+            self.manage_categories_btn,
         ):
             btn.config(state=state)
         self.manage_members_btn.config(state="normal" if self._can("admin") else "disabled")
@@ -301,9 +297,6 @@ class ExpenseTrackerApp(tk.Tk):
         self.manage_categories_btn = ttk.Button(btn_frame, text="Manage Categories\u2026", style="Accent.TButton",
                                                  command=self.open_category_manager)
         self.manage_categories_btn.pack(side="left", padx=4)
-        self.recurring_btn = ttk.Button(btn_frame, text="Recurring Transactions\u2026", style="Warning.TButton",
-                                         command=self.open_recurring_window)
-        self.recurring_btn.pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Reports & Export\u2026", style="Warning.TButton",
                    command=self.open_reports_window).pack(side="left", padx=4)
 
@@ -420,32 +413,6 @@ class ExpenseTrackerApp(tk.Tk):
             totals_frame, text="Income: --   Expenses: --   Net: --", style="Header.TLabel"
         )
         self.pl_label.pack(anchor="w")
-
-
-    # Recurring transactions -- auto-run on startup
-    
-    def _run_due_recurring(self):
-        result = self.recurring_dao.generate_due(
-            ledger_id=self.ledger["id"],
-            txn_dao=self.txn_dao,
-            currency_service=self.currency_service,
-            base_currency=self.ledger["base_currency"],
-            acting_user_id=self.current_user["id"],
-        )
-        if result["created"]:
-            self.refresh_transactions()
-            self.refresh_summary()
-            messagebox.showinfo(
-                "Recurring transactions",
-                f"Generated {result['created']} transaction(s) from recurring rules.",
-            )
-        if result["skipped_rules"]:
-            messagebox.showwarning(
-                "Recurring transactions",
-                f"{len(result['skipped_rules'])} recurring rule(s) couldn't run because the "
-                "live exchange-rate API wasn't reachable. They'll be retried next time the "
-                "app opens (or click 'Run Due Now' in Recurring Transactions).",
-            )
 
     
     # Data refresh helpers
@@ -843,7 +810,7 @@ class ExpenseTrackerApp(tk.Tk):
                 messagebox.showinfo("No selection", "Select a category in the table first.", parent=win)
                 return
             if messagebox.askyesno("Confirm delete", "Delete the selected category? "
-                                    "(This will fail if transactions or recurring rules still reference it.)", parent=win):
+                                    "(This will fail if transactions still reference it.)", parent=win):
                 try:
                     self.category_dao.delete(selected_id["value"])
                 except Exception as exc:  # noqa: BLE001
@@ -861,237 +828,6 @@ class ExpenseTrackerApp(tk.Tk):
                    command=update_category).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Delete Selected", style="Danger.TButton",
                    command=delete_category).pack(side="left", padx=4)
-
-        load_rows()
-
-    
-    # Recurring transactions
-    
-    def open_recurring_window(self):
-        if not self._can("editor"):
-            messagebox.showinfo("Not allowed", "You have read-only (viewer) access to this ledger.")
-            return
-        win = tk.Toplevel(self)
-        win.title("Recurring Transactions")
-        win.geometry("760x480")
-        win.configure(bg=PALETTE["bg"])
-        win.transient(self)
-
-        columns = ("id", "category", "amount", "type", "frequency", "next_run", "active")
-        tree = ttk.Treeview(win, columns=columns, show="headings", height=10)
-        headings = {
-            "id": "ID", "category": "Category", "amount": "Amount", "type": "Type",
-            "frequency": "Frequency", "next_run": "Next Run", "active": "Active",
-        }
-        widths = {"id": 36, "category": 150, "amount": 100, "type": 70, "frequency": 110, "next_run": 100, "active": 60}
-        for col in columns:
-            tree.heading(col, text=headings[col])
-            tree.column(col, width=widths[col], anchor="w")
-        tree.pack(fill="both", expand=True, padx=10, pady=(10, 6))
-
-        def load_rows():
-            for row in tree.get_children():
-                tree.delete(row)
-            for r in self.recurring_dao.list_for_ledger(self.ledger["id"]):
-                tree.insert(
-                    "", "end", iid=str(r.id),
-                    values=(
-                        r.id, r.category_name, f"{r.amount:.2f} {r.currency}", r.txn_type,
-                        f"every {r.interval_count} {r.frequency}" if r.interval_count > 1 else r.frequency,
-                        r.next_run_date, "yes" if r.active else "paused",
-                    ),
-                )
-
-        form = ttk.LabelFrame(win, text="Add / Edit Rule")
-        form.pack(fill="x", padx=10, pady=6)
-
-        ttk.Label(form, text="Amount").grid(row=0, column=0, padx=4, pady=4, sticky="w")
-        amount_var = tk.StringVar()
-        ttk.Entry(form, textvariable=amount_var, width=10).grid(row=0, column=1, padx=4, pady=4)
-
-        ttk.Label(form, text="Currency").grid(row=0, column=2, padx=4, pady=4, sticky="w")
-        currency_var = tk.StringVar(value=self.ledger["base_currency"])
-        ttk.Combobox(form, textvariable=currency_var, values=COMMON_CURRENCIES, width=8, state="readonly").grid(
-            row=0, column=3, padx=4, pady=4
-        )
-
-        ttk.Label(form, text="Type").grid(row=0, column=4, padx=4, pady=4, sticky="w")
-        type_var = tk.StringVar(value="expense")
-        ttk.Combobox(form, textvariable=type_var, values=["expense", "income"], width=8, state="readonly").grid(
-            row=0, column=5, padx=4, pady=4
-        )
-
-        ttk.Label(form, text="Category").grid(row=1, column=0, padx=4, pady=4, sticky="w")
-        category_var = tk.StringVar()
-        category_combo = ttk.Combobox(form, textvariable=category_var, width=18, state="readonly")
-        category_combo["values"] = [c.name for c in self.category_dao.get_all(self.ledger["id"])]
-        if category_combo["values"]:
-            category_combo.current(0)
-        category_combo.grid(row=1, column=1, columnspan=2, padx=4, pady=4, sticky="w")
-
-        ttk.Label(form, text="Frequency").grid(row=1, column=3, padx=4, pady=4, sticky="w")
-        frequency_var = tk.StringVar(value="monthly")
-        ttk.Combobox(form, textvariable=frequency_var, values=FREQUENCIES, width=10, state="readonly").grid(
-            row=1, column=4, padx=4, pady=4
-        )
-
-        ttk.Label(form, text="Every").grid(row=1, column=5, padx=4, pady=4, sticky="w")
-        interval_var = tk.StringVar(value="1")
-        ttk.Entry(form, textvariable=interval_var, width=4).grid(row=1, column=6, padx=4, pady=4, sticky="w")
-
-        ttk.Label(form, text="Start date").grid(row=2, column=0, padx=4, pady=4, sticky="w")
-        start_var = tk.StringVar(value=date.today().isoformat())
-        ttk.Entry(form, textvariable=start_var, width=12).grid(row=2, column=1, padx=4, pady=4, sticky="w")
-
-        ttk.Label(form, text="End date (optional)").grid(row=2, column=2, padx=4, pady=4, sticky="w")
-        end_var = tk.StringVar()
-        ttk.Entry(form, textvariable=end_var, width=12).grid(row=2, column=3, padx=4, pady=4, sticky="w")
-
-        ttk.Label(form, text="Description").grid(row=3, column=0, padx=4, pady=4, sticky="w")
-        description_var = tk.StringVar()
-        ttk.Entry(form, textvariable=description_var, width=40).grid(
-            row=3, column=1, columnspan=4, padx=4, pady=4, sticky="we"
-        )
-
-        selected_id = {"value": None}
-
-        def on_select(_event):
-            sel = tree.selection()
-            if not sel:
-                return
-            rule_id = int(sel[0])
-            rule = next((r for r in self.recurring_dao.list_for_ledger(self.ledger["id"]) if r.id == rule_id), None)
-            if not rule:
-                return
-            selected_id["value"] = rule_id
-            amount_var.set(str(rule.amount))
-            currency_var.set(rule.currency)
-            type_var.set(rule.txn_type)
-            category_var.set(rule.category_name)
-            frequency_var.set(rule.frequency)
-            interval_var.set(str(rule.interval_count))
-            start_var.set(rule.start_date)
-            end_var.set(rule.end_date or "")
-            description_var.set(rule.description or "")
-
-        tree.bind("<<TreeviewSelect>>", on_select)
-
-        def read_form():
-            try:
-                amount = float(amount_var.get())
-                if amount <= 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("Invalid amount", "Enter a positive number.", parent=win)
-                return None
-            category = self.category_dao.get_by_name(self.ledger["id"], category_var.get().strip())
-            if not category:
-                messagebox.showerror("Invalid category", "Select a valid category.", parent=win)
-                return None
-            try:
-                interval_count = int(interval_var.get())
-                if interval_count < 1:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("Invalid interval", "'Every' must be a whole number >= 1.", parent=win)
-                return None
-            try:
-                date.fromisoformat(start_var.get().strip())
-            except ValueError:
-                messagebox.showerror("Invalid start date", "Use YYYY-MM-DD.", parent=win)
-                return None
-            end_date = end_var.get().strip() or None
-            if end_date:
-                try:
-                    date.fromisoformat(end_date)
-                except ValueError:
-                    messagebox.showerror("Invalid end date", "Use YYYY-MM-DD or leave blank.", parent=win)
-                    return None
-            return {
-                "amount": amount,
-                "currency": currency_var.get().strip().upper(),
-                "txn_type": type_var.get(),
-                "category_id": category.id,
-                "description": description_var.get().strip(),
-                "frequency": frequency_var.get(),
-                "interval_count": interval_count,
-                "start_date": start_var.get().strip(),
-                "end_date": end_date,
-            }
-
-        def clear_form():
-            selected_id["value"] = None
-            amount_var.set("")
-            description_var.set("")
-            interval_var.set("1")
-            start_var.set(date.today().isoformat())
-            end_var.set("")
-            for row in tree.selection():
-                tree.selection_remove(row)
-
-        def add_rule():
-            data = read_form()
-            if data is None:
-                return
-            self.recurring_dao.add(
-                ledger_id=self.ledger["id"], created_by=self.current_user["id"], **data
-            )
-            clear_form()
-            load_rows()
-
-        def update_rule():
-            if selected_id["value"] is None:
-                messagebox.showinfo("No selection", "Select a rule in the table first.", parent=win)
-                return
-            data = read_form()
-            if data is None:
-                return
-            data.pop("start_date")
-            self.recurring_dao.update(selected_id["value"], **data)
-            clear_form()
-            load_rows()
-
-        def delete_rule():
-            if selected_id["value"] is None:
-                messagebox.showinfo("No selection", "Select a rule in the table first.", parent=win)
-                return
-            if messagebox.askyesno("Confirm delete", "Delete this recurring rule? Past transactions it already "
-                                    "generated are kept.", parent=win):
-                self.recurring_dao.delete(selected_id["value"])
-                clear_form()
-                load_rows()
-
-        def toggle_active():
-            if selected_id["value"] is None:
-                messagebox.showinfo("No selection", "Select a rule in the table first.", parent=win)
-                return
-            rule = next((r for r in self.recurring_dao.list_for_ledger(self.ledger["id"])
-                         if r.id == selected_id["value"]), None)
-            if rule:
-                self.recurring_dao.set_active(rule.id, not rule.active)
-                load_rows()
-
-        def run_due_now():
-            result = self.recurring_dao.generate_due(
-                ledger_id=self.ledger["id"], txn_dao=self.txn_dao,
-                currency_service=self.currency_service, base_currency=self.ledger["base_currency"],
-                acting_user_id=self.current_user["id"],
-            )
-            load_rows()
-            self.refresh_transactions()
-            self.refresh_summary()
-            msg = f"Generated {result['created']} transaction(s)."
-            if result["skipped_rules"]:
-                msg += f" {len(result['skipped_rules'])} rule(s) skipped (couldn't reach the live rate API)."
-            messagebox.showinfo("Recurring transactions", msg, parent=win)
-
-        btns = ttk.Frame(win)
-        btns.pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Button(btns, text="Add Rule", style="Success.TButton", command=add_rule).pack(side="left", padx=4)
-        ttk.Button(btns, text="Update Selected", style="Info.TButton", command=update_rule).pack(side="left", padx=4)
-        ttk.Button(btns, text="Pause/Resume", style="Warning.TButton", command=toggle_active).pack(side="left", padx=4)
-        ttk.Button(btns, text="Delete Selected", style="Danger.TButton", command=delete_rule).pack(side="left", padx=4)
-        ttk.Button(btns, text="Run Due Now", style="Accent.TButton", command=run_due_now).pack(side="left", padx=4)
 
         load_rows()
 
@@ -1331,4 +1067,4 @@ class ExpenseTrackerApp(tk.Tk):
 
     def _switch_ledger(self):
         self.switch_ledger_requested = True
-        self.destroy()  
+        self.destroy()

@@ -41,7 +41,6 @@ class Transaction:
     base_currency: str
     description: str
     txn_date: str
-    recurring_id: int | None = None
     added_by_username: str = ""
 
     @property
@@ -51,24 +50,6 @@ class Transaction:
     @property
     def signed_base_amount(self) -> float:
         return self.base_amount if self.txn_type == "income" else -self.base_amount
-
-
-@dataclass
-class RecurringRule:
-    id: int
-    ledger_id: int
-    category_id: int
-    category_name: str
-    amount: float
-    currency: str
-    txn_type: str
-    description: str
-    frequency: str
-    interval_count: int
-    start_date: str
-    end_date: str | None
-    next_run_date: str
-    active: bool
 
 
 # UserDAO
@@ -368,7 +349,6 @@ class TransactionDAO:
         txn_type: str = "expense",
         rate_to_base: float = 1.0,
         base_currency: str = "USD",
-        recurring_id: int | None = None,
     ) -> int:
         if txn_type not in ("income", "expense"):
             raise ValueError("txn_type must be 'income' or 'expense'")
@@ -376,11 +356,11 @@ class TransactionDAO:
             """
             INSERT INTO Transactions 
             (ledger_id, user_id, category_id, amount, currency, txn_type, 
-             rate_to_base, base_currency, description, txn_date, recurring_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             rate_to_base, base_currency, description, txn_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (ledger_id, user_id, category_id, amount, currency, txn_type,
-             rate_to_base, base_currency, description, txn_date, recurring_id),
+             rate_to_base, base_currency, description, txn_date),
         )
         return cur.lastrowid
 
@@ -429,7 +409,7 @@ class TransactionDAO:
         sql = """
             SELECT t.id, t.ledger_id, t.user_id, t.category_id, c.name AS category_name,
                    t.amount, t.currency, t.txn_type, t.rate_to_base,
-                   t.base_currency, t.description, t.txn_date, t.recurring_id,
+                   t.base_currency, t.description, t.txn_date,
                    u.username AS added_by_username
             FROM Transactions t
             JOIN Categories c ON c.id = t.category_id
@@ -461,7 +441,7 @@ class TransactionDAO:
             Transaction(
                 r["id"], r["ledger_id"], r["user_id"], r["category_id"], r["category_name"],
                 r["amount"], r["currency"], r["txn_type"], r["rate_to_base"],
-                r["base_currency"], r["description"], r["txn_date"], r["recurring_id"],
+                r["base_currency"], r["description"], r["txn_date"],
                 r["added_by_username"] or "",
             )
             for r in rows
@@ -543,194 +523,13 @@ class TransactionDAO:
         writer.writerow([
             "id", "date", "type", "category", "amount", "currency",
             "rate_to_base", "base_currency", "base_amount", "added_by",
-            "description", "recurring",
+            "description",
         ])
         for t in transactions:
             writer.writerow([
                 t.id, t.txn_date, t.txn_type, t.category_name,
                 f"{t.amount:.2f}", t.currency, f"{t.rate_to_base:.6f}",
                 t.base_currency, f"{t.base_amount:.2f}", t.added_by_username,
-                t.description or "", "yes" if t.recurring_id else "no",
+                t.description or "",
             ])
         return buf.getvalue()
-
-
-# RecurringTransactionDAO -- repeating-transaction rules
-
-class RecurringTransactionDAO:
-   
-    def __init__(self, db: DatabaseManager):
-        self.db = db
-
-    def add(
-        self,
-        ledger_id: int,
-        category_id: int,
-        amount: float,
-        currency: str,
-        txn_type: str,
-        description: str,
-        frequency: str,
-        interval_count: int,
-        start_date: str,
-        end_date: str | None,
-        created_by: int,
-    ) -> int:
-        if txn_type not in ("income", "expense"):
-            raise ValueError("txn_type must be 'income' or 'expense'")
-        if frequency not in ("daily", "weekly", "monthly", "yearly"):
-            raise ValueError("frequency must be daily, weekly, monthly, or yearly")
-        if interval_count < 1:
-            raise ValueError("interval must be at least 1")
-        cur = self.db.execute(
-            """
-            INSERT INTO RecurringTransactions 
-            (ledger_id, category_id, amount, currency, txn_type, description,
-             frequency, interval_count, start_date, end_date, next_run_date, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (ledger_id, category_id, amount, currency, txn_type, description,
-             frequency, interval_count, start_date, end_date, start_date, created_by),
-        )
-        return cur.lastrowid
-
-    def update(
-        self,
-        rule_id: int,
-        category_id: int,
-        amount: float,
-        currency: str,
-        txn_type: str,
-        description: str,
-        frequency: str,
-        interval_count: int,
-        end_date: str | None,
-    ):
-        if txn_type not in ("income", "expense"):
-            raise ValueError("txn_type must be 'income' or 'expense'")
-        if frequency not in ("daily", "weekly", "monthly", "yearly"):
-            raise ValueError("frequency must be daily, weekly, monthly, or yearly")
-        self.db.execute(
-            """
-            UPDATE RecurringTransactions 
-            SET category_id = ?, amount = ?, currency = ?, txn_type = ?, description = ?,
-                frequency = ?, interval_count = ?, end_date = ?
-            WHERE id = ?
-            """,
-            (category_id, amount, currency, txn_type, description,
-             frequency, interval_count, end_date, rule_id),
-        )
-
-    def set_active(self, rule_id: int, active: bool):
-        self.db.execute(
-            "UPDATE RecurringTransactions SET active = ? WHERE id = ?",
-            (1 if active else 0, rule_id)
-        )
-
-    def delete(self, rule_id: int):
-        self.db.execute("DELETE FROM RecurringTransactions WHERE id = ?", (rule_id,))
-
-    def list_for_ledger(self, ledger_id: int) -> list[RecurringRule]:
-        rows = self.db.query(
-            """
-            SELECT r.*, c.name AS category_name
-            FROM RecurringTransactions r
-            JOIN Categories c ON c.id = r.category_id
-            WHERE r.ledger_id = ?
-            ORDER BY r.id ASC
-            """,
-            (ledger_id,),
-        )
-        return [
-            RecurringRule(
-                r["id"], r["ledger_id"], r["category_id"], r["category_name"],
-                r["amount"], r["currency"], r["txn_type"], r["description"] or "",
-                r["frequency"], r["interval_count"], r["start_date"], r["end_date"],
-                r["next_run_date"], bool(r["active"]),
-            )
-            for r in rows
-        ]
-
-    # ---- Date math -----
-
-    @staticmethod
-    def _advance(current: date, frequency: str, interval_count: int) -> date:
-        if frequency == "daily":
-            return current + timedelta(days=interval_count)
-        if frequency == "weekly":
-            return current + timedelta(weeks=interval_count)
-        if frequency == "monthly":
-            return RecurringTransactionDAO._add_months(current, interval_count)
-        if frequency == "yearly":
-            return RecurringTransactionDAO._add_months(current, interval_count * 12)
-        raise ValueError(f"Unknown frequency: {frequency}")
-
-    @staticmethod
-    def _add_months(d: date, months: int) -> date:
-        import calendar
-        total_month_index = d.month - 1 + months
-        year = d.year + total_month_index // 12
-        month = total_month_index % 12 + 1
-        day = min(d.day, calendar.monthrange(year, month)[1])
-        return date(year, month, day)
-
-    # ---- Materializing due rules into real transactions --------
-    
-    def generate_due(
-        self,
-        ledger_id: int,
-        txn_dao: TransactionDAO,
-        currency_service,
-        base_currency: str,
-        acting_user_id: int,
-        today: date | None = None,
-    ) -> dict:
-        
-        from backend.currency_service import CurrencyServiceError
-
-        today = today or date.today()
-        created = 0
-        skipped_rules: list[int] = []
-
-        for rule in self.list_for_ledger(ledger_id):
-            if not rule.active:
-                continue
-            next_run = date.fromisoformat(rule.next_run_date)
-            end = date.fromisoformat(rule.end_date) if rule.end_date else None
-            rule_failed = False
-
-            while next_run <= today and (end is None or next_run <= end):
-                try:
-                    rate_to_base = currency_service.get_rate(rule.currency, base_currency)
-                except Exception:  # noqa: BLE001 - CurrencyServiceError or network issue
-                    rule_failed = True
-                    break
-
-                txn_dao.add(
-                    ledger_id=ledger_id,
-                    user_id=acting_user_id,
-                    category_id=rule.category_id,
-                    amount=rule.amount,
-                    currency=rule.currency,
-                    description=(rule.description or "").strip() or "(recurring)",
-                    txn_date=next_run.isoformat(),
-                    txn_type=rule.txn_type,
-                    rate_to_base=rate_to_base,
-                    base_currency=base_currency,
-                    recurring_id=rule.id,
-                )
-                created += 1
-                next_run = self._advance(next_run, rule.frequency, rule.interval_count)
-
-            if rule_failed:
-                skipped_rules.append(rule.id)
-                continue
-
-            if end is not None and next_run > end:
-                self.set_active(rule.id, False)
-            self.db.execute(
-                "UPDATE RecurringTransactions SET next_run_date = ? WHERE id = ?",
-                (next_run.isoformat(), rule.id),
-            )
-
-        return {"created": created, "skipped_rules": skipped_rules}
