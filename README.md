@@ -1,7 +1,8 @@
 # VaultFX
+## Overview
 
-A desktop expense/income tracker built with **Python, SQLite, and Tkinter**. Record
-income and expenses, organize them by custom personal/business categories, set monthly
+A desktop expense/income tracker where recorded the 
+income and expenses are organized  by custom personal/business categories, set monthly
 budgets with alert badges, and see everything converted into any currency using live
 exchange rates with historical rate locking for auditability.
 
