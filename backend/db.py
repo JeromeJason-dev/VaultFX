@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
+from typing import Any
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "finance_tracker.db"
@@ -43,17 +44,32 @@ class DatabaseManager:
         self._initialize_schema()
         self._run_migrations()
 
-    def execute(self, query: str, params: tuple = ()) -> sqlite3.Cursor:
+    def _normalize_args(self, query: str, params: Any) -> tuple[str, tuple | dict]:
+        """Validates the query type and normalizes params into a tuple/dict."""
+        if not isinstance(query, str):
+            raise TypeError(
+                f"SQL query must be a string, but received {type(query).__name__}: {query!r}. "
+                "Did you forget to pass the SQL string before your parameters?"
+            )
+        if not isinstance(params, (tuple, list, dict)):
+            params = (params,)
+        return query, params
+
+    def execute(self, query: str, params: Any = ()) -> sqlite3.Cursor:
         """Run an INSERT/UPDATE/DELETE (or DDL) statement and commit."""
+        query, params = self._normalize_args(query, params)
         cur = self.conn.execute(query, params)
         self.conn.commit()
         return cur
 
-    def query(self, query: str, params: tuple = ()) -> list[sqlite3.Row]:
+    def query(self, query: str, params: Any = ()) -> list[sqlite3.Row]:
         """Run a SELECT and return all rows."""
+        query, params = self._normalize_args(query, params)
         return self.conn.execute(query, params).fetchall()
 
-    def query_one(self, query: str, params: tuple = ()) -> sqlite3.Row | None:
+    def query_one(self, query: str, params: Any = ()) -> sqlite3.Row | None:
+        """Run a SELECT and return a single row or None."""
+        query, params = self._normalize_args(query, params)
         return self.conn.execute(query, params).fetchone()
 
     @contextmanager
@@ -82,8 +98,6 @@ class DatabaseManager:
                 created_at    TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            -- A shared "book" of categories/transactions. Membership +
-            -- role live in LedgerMembers below.
             CREATE TABLE IF NOT EXISTS Ledgers (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 name          TEXT NOT NULL,
@@ -130,8 +144,6 @@ class DatabaseManager:
                 FOREIGN KEY (category_id) REFERENCES Categories(id) ON DELETE RESTRICT
             );
 
-            -- A repeating-transaction rule. RecurringTransactionDAO.generate_due()
-            -- materializes real Transactions rows from these as they come due.
             CREATE TABLE IF NOT EXISTS RecurringTransactions (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 ledger_id      INTEGER NOT NULL REFERENCES Ledgers(id) ON DELETE CASCADE,

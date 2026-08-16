@@ -119,7 +119,7 @@ class UserDAO:
         password_hash = self._hash_password(password)
         try:
             cur = self.db.execute(
-
+                "INSERT INTO Users (username, password_hash, base_currency) VALUES (?, ?, ?)",
                 (username, password_hash, base_currency.upper() or "USD"),
             )
         except sqlite3.IntegrityError as exc:
@@ -127,7 +127,6 @@ class UserDAO:
         return cur.lastrowid
 
     def verify_credentials(self, username: str, password: str):
-        
         user = self.get_by_username(username)
         if user is None or not self._password_matches(password, user["password_hash"]):
             return None
@@ -162,7 +161,7 @@ class LedgerDAO:
 
     def get_role(self, ledger_id: int, user_id: int) -> str | None:
         row = self.db.query_one(
-            
+            "SELECT role FROM LedgerMembers WHERE ledger_id = ? AND user_id = ?",
             (ledger_id, user_id),
         )
         return row["role"] if row else None
@@ -180,17 +179,17 @@ class LedgerDAO:
     def create_ledger(self, name: str, base_currency: str, owner_user_id: int) -> int:
         name = name.strip() or "Untitled Ledger"
         cur = self.db.execute(
-            
+            "INSERT INTO Ledgers (name, base_currency, owner_id) VALUES (?, ?, ?)",
             (name, base_currency.upper() or "USD", owner_user_id),
         )
         ledger_id = cur.lastrowid
         self.db.execute(
-            
+            "INSERT INTO LedgerMembers (ledger_id, user_id, role) VALUES (?, ?, 'owner')",
             (ledger_id, owner_user_id),
         )
         for cat_name, cat_type in DEFAULT_CATEGORIES:
             self.db.execute(
-                
+                "INSERT INTO Categories (ledger_id, name, category_type) VALUES (?, ?, ?)",
                 (ledger_id, cat_name, cat_type),
             )
         return ledger_id
@@ -200,7 +199,13 @@ class LedgerDAO:
 
     def get_ledgers_for_user(self, user_id: int) -> list[dict]:
         rows = self.db.query(
-            
+            """
+            SELECT l.*, lm.role 
+            FROM Ledgers l
+            JOIN LedgerMembers lm ON l.id = lm.ledger_id
+            WHERE lm.user_id = ?
+            ORDER BY l.name ASC
+            """,
             (user_id,),
         )
         return [dict(r) for r in rows]
@@ -223,13 +228,18 @@ class LedgerDAO:
 
     def list_members(self, ledger_id: int) -> list[dict]:
         rows = self.db.query(
-           
+            """
+            SELECT u.id, u.username, lm.role
+            FROM LedgerMembers lm
+            JOIN Users u ON u.id = lm.user_id
+            WHERE lm.ledger_id = ?
+            ORDER BY u.username ASC
+            """,
             (ledger_id,),
         )
         return [dict(r) for r in rows]
 
     def invite_member(self, ledger_id: int, username: str, role: str, acting_user_id: int):
-       
         acting_role = self._require(ledger_id, acting_user_id, "admin")
         if role not in ("admin", "editor", "viewer"):
             raise ValueError("Role must be one of: admin, editor, viewer.")
@@ -246,12 +256,12 @@ class LedgerDAO:
 
         if existing_role:
             self.db.execute(
-        
+                "UPDATE LedgerMembers SET role = ? WHERE ledger_id = ? AND user_id = ?",
                 (role, ledger_id, user["id"]),
             )
         else:
             self.db.execute(
-
+                "INSERT INTO LedgerMembers (ledger_id, user_id, role) VALUES (?, ?, ?)",
                 (ledger_id, user["id"], role),
             )
 
@@ -265,7 +275,7 @@ class LedgerDAO:
         if new_role not in ("admin", "editor", "viewer"):
             raise ValueError("Role must be one of: admin, editor, viewer.")
         self.db.execute(
-            
+            "UPDATE LedgerMembers SET role = ? WHERE ledger_id = ? AND user_id = ?",
             (new_role, ledger_id, target_user_id),
         )
 
@@ -275,9 +285,9 @@ class LedgerDAO:
             raise ValueError("The ledger owner can't be removed. Delete the ledger instead.")
         if target_user_id != acting_user_id:
             self._require(ledger_id, acting_user_id, "admin")
-        # else: anyone can remove themselves (leave the ledger)
+        
         self.db.execute(
-            
+            "DELETE FROM LedgerMembers WHERE ledger_id = ? AND user_id = ?",
             (ledger_id, target_user_id),
         )
 
@@ -304,14 +314,14 @@ class CategoryDAO:
         if category_type not in ("personal", "business"):
             raise ValueError("category_type must be 'personal' or 'business'")
         cur = self.db.execute(
-            
+            "INSERT INTO Categories (ledger_id, name, monthly_budget, category_type) VALUES (?, ?, ?, ?)",
             (ledger_id, name, monthly_budget, category_type),
         )
         return cur.lastrowid
 
     def update_budget(self, category_id: int, monthly_budget: float):
         self.db.execute(
-            
+            "UPDATE Categories SET monthly_budget = ? WHERE id = ?",
             (monthly_budget, category_id),
         )
 
@@ -319,7 +329,7 @@ class CategoryDAO:
         if category_type not in ("personal", "business"):
             raise ValueError("category_type must be 'personal' or 'business'")
         self.db.execute(
-            
+            "UPDATE Categories SET name = ?, monthly_budget = ?, category_type = ? WHERE id = ?",
             (name, monthly_budget, category_type, category_id),
         )
 
@@ -336,7 +346,6 @@ class CategoryDAO:
         if ratio >= BUDGET_WARNING_THRESHOLD:
             return "warning"
         return "ok"
-
 
 
 # TransactionDAO (ledger-scoped)
@@ -364,7 +373,12 @@ class TransactionDAO:
         if txn_type not in ("income", "expense"):
             raise ValueError("txn_type must be 'income' or 'expense'")
         cur = self.db.execute(
-            
+            """
+            INSERT INTO Transactions 
+            (ledger_id, user_id, category_id, amount, currency, txn_type, 
+             rate_to_base, base_currency, description, txn_date, recurring_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             (ledger_id, user_id, category_id, amount, currency, txn_type,
              rate_to_base, base_currency, description, txn_date, recurring_id),
         )
@@ -385,7 +399,12 @@ class TransactionDAO:
         if txn_type not in ("income", "expense"):
             raise ValueError("txn_type must be 'income' or 'expense'")
         self.db.execute(
-
+            """
+            UPDATE Transactions 
+            SET category_id = ?, amount = ?, currency = ?, txn_type = ?, 
+                rate_to_base = ?, base_currency = ?, description = ?, txn_date = ?
+            WHERE id = ?
+            """,
             (category_id, amount, currency, txn_type, rate_to_base,
              base_currency, description, txn_date, txn_id),
         )
@@ -474,7 +493,6 @@ class TransactionDAO:
         return sum(t.base_amount for t in transactions)
 
     def monthly_totals(self, ledger_id: int, limit_months: int = 12) -> list:
-        
         sql = """
             SELECT strftime('%Y-%m', txn_date) AS month,
                    txn_type, amount, rate_to_base
@@ -494,7 +512,6 @@ class TransactionDAO:
     # ---- Income & Expense Tracking / P&L ------
 
     def monthly_pl(self, ledger_id: int, month: str) -> dict:
-        
         income_total = sum(
             t.base_amount for t in self.list_transactions(ledger_id, month=month, txn_type="income")
         )
@@ -517,7 +534,6 @@ class TransactionDAO:
         search_text: str | None = None,
         txn_type: str | None = None,
     ) -> str:
-        
         transactions = self.list_transactions(
             ledger_id, category_id=category_id, month=month,
             search_text=search_text, txn_type=txn_type,
@@ -567,7 +583,12 @@ class RecurringTransactionDAO:
         if interval_count < 1:
             raise ValueError("interval must be at least 1")
         cur = self.db.execute(
-            
+            """
+            INSERT INTO RecurringTransactions 
+            (ledger_id, category_id, amount, currency, txn_type, description,
+             frequency, interval_count, start_date, end_date, next_run_date, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             (ledger_id, category_id, amount, currency, txn_type, description,
              frequency, interval_count, start_date, end_date, start_date, created_by),
         )
@@ -590,14 +611,20 @@ class RecurringTransactionDAO:
         if frequency not in ("daily", "weekly", "monthly", "yearly"):
             raise ValueError("frequency must be daily, weekly, monthly, or yearly")
         self.db.execute(
-
+            """
+            UPDATE RecurringTransactions 
+            SET category_id = ?, amount = ?, currency = ?, txn_type = ?, description = ?,
+                frequency = ?, interval_count = ?, end_date = ?
+            WHERE id = ?
+            """,
             (category_id, amount, currency, txn_type, description,
              frequency, interval_count, end_date, rule_id),
         )
 
     def set_active(self, rule_id: int, active: bool):
         self.db.execute(
-             (1 if active else 0, rule_id)
+            "UPDATE RecurringTransactions SET active = ? WHERE id = ?",
+            (1 if active else 0, rule_id)
         )
 
     def delete(self, rule_id: int):
@@ -605,7 +632,13 @@ class RecurringTransactionDAO:
 
     def list_for_ledger(self, ledger_id: int) -> list[RecurringRule]:
         rows = self.db.query(
-            
+            """
+            SELECT r.*, c.name AS category_name
+            FROM RecurringTransactions r
+            JOIN Categories c ON c.id = r.category_id
+            WHERE r.ledger_id = ?
+            ORDER BY r.id ASC
+            """,
             (ledger_id,),
         )
         return [
