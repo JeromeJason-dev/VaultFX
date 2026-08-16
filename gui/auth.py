@@ -246,7 +246,7 @@ class LedgerPickerWindow(tk.Tk):
         self.chosen_ledger_id: int | None = None
 
         self.title("Choose a Ledger \u2014 Personal Finance Tracker")
-        self.geometry("460x420")
+        self.geometry("600x500")
         self.minsize(420, 380)
         self.configure(bg=PALETTE["bg"])
 
