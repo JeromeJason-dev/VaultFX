@@ -706,7 +706,7 @@ class ExpenseTrackerApp(tk.Tk):
             return
         win = tk.Toplevel(self)
         win.title("Manage Categories")
-        win.geometry("520x420")
+        win.geometry("700x600")
         win.configure(bg=PALETTE["bg"])
         win.transient(self)
 
@@ -840,7 +840,7 @@ class ExpenseTrackerApp(tk.Tk):
             return
         win = tk.Toplevel(self)
         win.title(f"Manage Members \u2014 {self.ledger['name']}")
-        win.geometry("560x420")
+        win.geometry("700x600")
         win.configure(bg=PALETTE["bg"])
         win.transient(self)
 
@@ -941,7 +941,7 @@ class ExpenseTrackerApp(tk.Tk):
     def open_reports_window(self):
         win = tk.Toplevel(self)
         win.title("Reports & Export")
-        win.geometry("640x560")
+        win.geometry("700x600")
         win.configure(bg=PALETTE["bg"])
         win.transient(self)
 
